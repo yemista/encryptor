@@ -24,9 +24,9 @@ int decryptRange(unsigned int start, unsigned int end, int* decrypted) {
 	return 0;
 }
 
-int testFunction1(char* fnName) {
+int testFunction1() {
 	ENCRYPTED_FUNCTION
-	printf("Hello World!\n");
+	//printf("Hello World!\n");
 	int x = 2 + 2;
 	int y = x * 3;
 	return y;
@@ -34,14 +34,15 @@ int testFunction1(char* fnName) {
 
 void testFunction2() {
 	ENCRYPTED_FUNCTION
-	printf("Back from dead!\n");
+	//printf("Back from dead!\n");
 	int x = 0;
 	int y = 0;
 	x * y;
 }
 
 int main(int argc, char** argv) {
-	testFunction1("hello");
+	int result = testFunction1();
+	printf("%d\n", result);
 	testFunction2();
 	return 0;
 }

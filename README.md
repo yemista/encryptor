@@ -26,7 +26,5 @@ As a colleague of mine pointed out, if the idea is to make the program unidentif
 
 
 
-
-
 Forgive my C trangressions! I am a Java programmer by nature
 

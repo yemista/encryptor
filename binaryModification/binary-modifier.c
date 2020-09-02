@@ -16,27 +16,30 @@
 #define         PROCESS_START_ADDRESS   1
 #define         PROCESS_END_ADDRESS     2
 
+#define         MASK                    0xd3
+
 void printUsage() {
         printf("error\n");
 }
 
 struct encryptable_range {
         int num;
-        unsigned long startAddress;
-        unsigned long endAddress;
+        int startAddress;
+        int endAddress;
+        int sectionHeaderIndex;
         struct encryptable_range* next;
 };
 
 struct encryptable_range* ranges = 0;
 
 void printRangesList() {
-        printf("\n\n\n\n");
+        printf("\n");
 
         struct encryptable_range* cur_range = ranges;
 
         while (cur_range != 0) {
-                printf("num: %d    start:  %lx   end:  %lx\n", cur_range->num, 
-                        cur_range->startAddress, cur_range->endAddress);
+                printf("num: %d  section index: %d  start:  %x   end:  %x\n", cur_range->num, 
+                        cur_range->sectionHeaderIndex, cur_range->startAddress, cur_range->endAddress);
                 cur_range = cur_range->next;
         }
 }
@@ -97,7 +100,7 @@ void setAddressBasedOnType(struct encryptable_range* range, Elf64_Addr addr, int
         }
 }
 
-void addAddressToEncryptListItem(int num, Elf64_Addr addr, int addrType) {
+void addAddressToEncryptListItem(int num, Elf64_Addr addr, int addrType, int sectionHeaderIndex) {
         int found = 0;
         struct encryptable_range* cur_range = ranges;
 
@@ -106,6 +109,7 @@ void addAddressToEncryptListItem(int num, Elf64_Addr addr, int addrType) {
                 ranges->num = num;
                 setAddressBasedOnType(ranges, addr, addrType);
                 ranges->next = 0;
+                ranges->sectionHeaderIndex = sectionHeaderIndex;
                 return;
         }
 
@@ -125,21 +129,22 @@ void addAddressToEncryptListItem(int num, Elf64_Addr addr, int addrType) {
                 setAddressBasedOnType(next_range, addr, addrType);
                 next_range->next = 0;
                 next_range->next = ranges;
+                next_range->sectionHeaderIndex = sectionHeaderIndex;
                 ranges = next_range;
         }
 }
 
-void addSymbolToEncryptionList(char* symName, Elf64_Addr symAddr) {
+void addSymbolToEncryptionList(char* symName, Elf64_Addr symAddr, int sectionHeaderIndex) {
         if (strstr(symName, "END_DECRYPT\0")) {
                 int symNum = parseSymbolNumber(symName, PROCESS_END_ADDRESS);
                 printf("sym num: %s    start:   %d\n", symName, symNum);
-                addAddressToEncryptListItem(symNum, symAddr, PROCESS_END_ADDRESS);
+                addAddressToEncryptListItem(symNum, symAddr, PROCESS_END_ADDRESS, sectionHeaderIndex);
         }
 
         if (strstr(symName, "START_DECRYPT\0")) {
                 int symNum = parseSymbolNumber(symName, PROCESS_START_ADDRESS);
                 printf("sym num: %s    end:   %d\n", symName, symNum);
-                addAddressToEncryptListItem(symNum, symAddr, PROCESS_START_ADDRESS);
+                addAddressToEncryptListItem(symNum, symAddr, PROCESS_START_ADDRESS, sectionHeaderIndex);
         }
 }
 
@@ -165,7 +170,7 @@ void processSymTab(Elf64_Shdr* shdr, Elf64_Shdr* strHdr, uint8_t *mem) {
                         printf("\n");
 
                         addSymbolToEncryptionList((char*)(mem + dynstr_off + sym.st_name),
-                                sym.st_value);
+                                sym.st_value, sym.st_shndx);
        
                 }
 
@@ -181,7 +186,7 @@ void processSymTab(Elf64_Shdr* shdr, Elf64_Shdr* strHdr, uint8_t *mem) {
                         printf("\n");
 
                         addSymbolToEncryptionList((char*)(mem + dynstr_off + sym.st_name),
-                                sym.st_value);
+                                sym.st_value, sym.st_shndx);
        
                 }
         }
@@ -231,6 +236,39 @@ Elf64_Shdr* getStrTabHeader(Elf64_Ehdr *ehdr, Elf64_Shdr *shdr, Elf64_Shdr* strS
         return 0;
 }
 
+void saveEncryptedFile(char* fileName, uint8_t* mem) {
+        int fd;
+
+        if ((fd = open(fileName, O_RDWR)) < 0) {
+                perror("open");
+                exit(-1);
+        }
+
+        struct stat st;
+
+        if (fstat(fd, &st) < 0) {
+                perror("fstat");
+                exit(-1);
+        }
+
+        close(fd);
+
+        int fileNameLen = strlen(fileName);
+        char newFileName[fileNameLen + 5];
+        strcpy(&newFileName[0], fileName);
+        strcpy(&newFileName[fileNameLen], "_MOD\0");
+
+        int new_fd;
+
+        if ((new_fd = open(&newFileName[0], O_RDWR | O_CREAT)) < 0) {
+                perror("open");
+                exit(-1);
+        }
+
+        write(new_fd, mem, st.st_size);
+        close(new_fd);
+}
+
 uint8_t* mapFileIntoMemory(char* fileName) {
         int fd;
 
@@ -258,6 +296,40 @@ uint8_t* mapFileIntoMemory(char* fileName) {
         }
 
         return mem;
+}
+
+Elf64_Shdr* getSectionHeaderByIndex(Elf64_Shdr* start, int index) {
+        return &start[index];
+}
+
+void updateEncryptableRangesWithSectionOffset(Elf64_Shdr *shdrStart) {
+        struct encryptable_range* cur_range = ranges;
+
+        while (cur_range != 0) {
+                int sectionIndex = cur_range->sectionHeaderIndex;
+                Elf64_Shdr* shdr = getSectionHeaderByIndex(shdrStart, sectionIndex); 
+                cur_range->startAddress += shdr->sh_offset;
+                cur_range->endAddress += shdr->sh_offset;
+                cur_range = cur_range->next;
+        }
+}
+
+void encryptRange(uint8_t* base, int start, int end) {
+        printf("encrypting range %x   %x\n", start, end);
+        uint8_t* byteToDecrypt = base;
+
+        for (int i = start; i <= end; ++i) {
+                byteToDecrypt[i] = (byteToDecrypt[i] ^ MASK);
+        }
+}
+
+void encryptMarkedCode(uint8_t *mem) {
+        struct encryptable_range* cur_range = ranges;
+
+        while (cur_range != 0) {
+                encryptRange(mem, cur_range->startAddress, cur_range->endAddress);
+                cur_range = cur_range->next;
+        }
 }
 
 int main(int argc, char** argv) {
@@ -290,4 +362,8 @@ int main(int argc, char** argv) {
 
         processSymTab(cur_symtab_section_header, cur_strtab_section_header, mem);
         printRangesList();
+        updateEncryptableRangesWithSectionOffset(shdr);
+        printRangesList();
+        encryptMarkedCode(mem);
+        saveEncryptedFile(argv[1], mem);
 }
